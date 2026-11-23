@@ -95,6 +95,19 @@ interface ProviderState extends ProviderInfo {
 
 const PROVIDER_DEFS: readonly Omit<ProviderInfo, "auth">[] = [
   {
+    // Claude Pro / Max through the operator's own Claude Code login. 0 never
+    // reads that login: each request is a headless `claude -p` run. The CLI
+    // sets ZERO_CLAUDE_CODE_PATH at startup when `claude` is installed, which
+    // is what marks it configured here; CLAUDE_CODE_OAUTH_TOKEN (from
+    // `claude setup-token`) is Claude Code's own variable for headless hosts.
+    id: "claude-code",
+    label: "Claude subscription",
+    methods: ["oauth"],
+    envVars: ["ZERO_CLAUDE_CODE_PATH", "CLAUDE_CODE_OAUTH_TOKEN"],
+    fileSource: "Claude Code login (`claude login`)",
+    hint: "install Claude Code and run `claude login` on this computer (headless hosts: `claude setup-token`, then set CLAUDE_CODE_OAUTH_TOKEN); ZERO_CLAUDE_CODE=0 turns it off",
+  },
+  {
     id: "chatgpt-codex",
     label: "ChatGPT Codex",
     methods: ["oauth"],
@@ -200,9 +213,9 @@ const PROVIDER_DEFS: readonly Omit<ProviderInfo, "auth">[] = [
   {
     id: "anthropic",
     label: "Anthropic",
-    // API key only for now. The schema supports OAuth, but Anthropic/Claude
-    // subscription OAuth is deliberately deferred — do not add "oauth" here
-    // until that workstream lands.
+    // API key only. A Claude subscription is the separate `claude-code`
+    // provider above: Anthropic allows subscription logins only in Claude Code
+    // itself, so 0 drives Claude Code instead of using that OAuth token.
     methods: ["api-key"],
     envVars: ["ANTHROPIC_API_KEY"],
     hint: "set ANTHROPIC_API_KEY=sk-ant-... from console.anthropic.com",

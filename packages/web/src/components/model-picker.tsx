@@ -17,7 +17,7 @@ export interface CatalogProvider { id: string; label: string }
 /** Subscription-based OpenAI providers share the OpenAI mark; the rail tells them apart from the API provider. */
 const isOpenAiBrand = (id: string) => ["chatgpt-plan", "chatgpt-codex", "codex", "chatgpt"].includes(id);
 export function providerLabel(id: string): string {
-  return ({ "chatgpt-plan": "ChatGPT plan", "chatgpt-codex": "ChatGPT / Codex", openai: "OpenAI API", anthropic: "Anthropic", google: "Google", openrouter: "OpenRouter", deepseek: "DeepSeek", xai: "xAI", "z-ai": "Z.ai", kimi: "Kimi", qwen: "Qwen", azure: "Azure OpenAI", opencode: "OpenCode", together: "Together AI" } as Record<string, string>)[id] ?? id;
+  return ({ "chatgpt-plan": "ChatGPT plan", "chatgpt-codex": "ChatGPT / Codex", "claude-code": "Claude subscription", openai: "OpenAI API", anthropic: "Anthropic", google: "Google", openrouter: "OpenRouter", deepseek: "DeepSeek", xai: "xAI", "z-ai": "Z.ai", kimi: "Kimi", qwen: "Qwen", azure: "Azure OpenAI", opencode: "OpenCode", together: "Together AI" } as Record<string, string>)[id] ?? id;
 }
 export function catalogProviderIds(models: readonly CatalogModel[], diagnostics: readonly { providerId: string }[] = []): string[] {
   return [...new Set([...models.map(model => model.provider), ...diagnostics.map(item => item.providerId)])];

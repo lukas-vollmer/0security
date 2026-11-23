@@ -673,7 +673,8 @@ Options:
                                   --min-attempts) (default: "0.5")
   --min-attempts <n>              Fixes to attempt before the failure share can stop the run
                                   (default: "4")
-  --model <model>                 Model for the fix threads (default: gpt-6-luna)
+  --model <model>                 Model for the fix threads (default: claude-opus-5-5 with a Claude
+                                  subscription, otherwise gpt-6-luna)
   --timeout <seconds>             Maximum seconds to wait for one fix (default: "1800")
   --retry                         Work again on findings that already have a fix branch or pull
                                   request
@@ -738,7 +739,8 @@ Options:
                              fixed (untrusted content; off by default)
   --no-pr                    Commit on the fix branch but do not push or open a pull request
   --budget <usd>             Stop when the estimated spend reaches this many USD (default: "3")
-  --model <model>            Model for the fix thread (default: gpt-6-luna)
+  --model <model>            Model for the fix thread (default: claude-opus-5-5 with a Claude
+                             subscription, otherwise gpt-6-luna)
   --timeout <seconds>        Maximum seconds to wait for the fix (default: "1800")
   --engine-url <url>         Attach directly to a running trusted engine
   --engine-token-env <name>  Environment variable holding the attached engine token
@@ -1014,7 +1016,8 @@ Options:
   --per-finding <usd>             Spend cap for one finding, in USD (default: "0.3")
   --max-consecutive-failures <n>  Stop after this many checks in a row that return no verdict
                                   (default: "3")
-  --model <model>                 Model for the threads (default: gpt-6-luna)
+  --model <model>                 Model for the threads (default: claude-opus-5-5 with a Claude
+                                  subscription, otherwise gpt-6-luna)
   --timeout <seconds>             Maximum seconds to wait for one thread (default: "600")
   --dry-run                       List what would be checked and skipped; change nothing
   --format <format>               Output: text or json (choices: "text", "json")
@@ -1321,7 +1324,8 @@ Options:
                              default: a change under review can edit that file; in CI pass the base
                              branch's copy with --context instead
   --skill <id>               Skill that holds the scan method (default: "scan")
-  --model <model>            Model for the scan thread (default: gpt-6-luna)
+  --model <model>            Model for the scan thread (default: claude-opus-5-5 with a Claude
+                             subscription, otherwise gpt-6-luna)
   --batches <mode>           auto reviews a large folder in batches, one thread per group of entry
                              points, and records what each batch covered; on always does; off keeps
                              one thread (default: "auto")
@@ -2345,7 +2349,8 @@ Options:
                              (default: the remote's default branch)
   --format <format>          json prints the outcome as JSON
   --budget <usd>             Stop when the estimated spend reaches this many USD (default: "3")
-  --model <model>            Model for the thread (default: gpt-6-luna)
+  --model <model>            Model for the thread (default: claude-opus-5-5 with a Claude
+                             subscription, otherwise gpt-6-luna)
   --timeout <seconds>        Maximum seconds to wait (default: "1800")
   --engine-url <url>         Attach directly to a running trusted engine
   --engine-token-env <name>  Environment variable holding the attached engine token

@@ -42,6 +42,12 @@ export const MANUAL_PRICING: Record<string, ModelRates> = {
   // Sonnet 5.5: Anthropic spells it with a hyphen, OpenRouter with a dot (ids are not normalized).
   "claude-sonnet-5-5": { input: 2.00, output: 10.00, cachedInput: 0.10, cacheWrite: 2.50 },
   "claude-sonnet-5.5": { input: 2.00, output: 10.00, cachedInput: 0.10, cacheWrite: 2.50 },
+  // Anthropic first-party API rates (2026-11); also the notional rate for the same
+  // models on a Claude subscription through Claude Code, which is not billed per token.
+  "claude-opus-5-5": { input: 4.00, output: 20.00, cachedInput: 0.20, cacheWrite: 5.00 },
+  "claude-fable-5-2": { input: 8.00, output: 40.00, cachedInput: 0.20, cacheWrite: 10.00 },
+  // Up to 100K-token prompts; longer prompts cost $0.50 / $2.50 (this table cannot express tiers).
+  "claude-haiku-5-5": { input: 0.10, output: 0.50 },
   "claude-haiku-4-5": { input: 0.80, output: 4.00, cachedInput: 0.08 },
   // OpenAI codex alias — mirrors gpt-5.5 (OSS feed has only the bare key)
   "gpt-5.5-codex": { input: 5.00, output: 30.00 },
@@ -190,7 +196,7 @@ function azureDeploymentPriceKey(model: string): string | null {
 const MODEL_VENDOR_PREFIXES = [
   "openai/", "azure/", "anthropic/", "google/", "deepseek/", "meta/", "mistral/",
   "z-ai/", "zai/", "kimi/", "moonshot/", "qwen/", "openrouter/", "opencode/",
-  "xai/", "x-ai/", "together/",
+  "xai/", "x-ai/", "together/", "claude-code/",
 ];
 
 /** Every progressive vendor-prefix-stripped spelling of `model`, raw form first,
@@ -269,6 +275,7 @@ export function modelProvider(model?: string): string {
   if (!model) return "unknown";
   const lowered = model.toLowerCase();
   if (lowered.startsWith("together/")) return "together";
+  if (lowered.startsWith("claude-code/")) return "claude-code";
   if (lowered.startsWith("openai/")) return "openai";
   if (lowered.startsWith("azure/")) return "azure";
   if (lowered.startsWith("anthropic/")) return "anthropic";

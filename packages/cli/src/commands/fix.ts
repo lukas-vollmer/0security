@@ -16,7 +16,7 @@ import { fixPrompt, type FixPolicy, type FixPromptFinding } from "@0/engine/shar
 import { loadFixPolicyFile, type FixPolicyOptions, type LoadedFixPolicy } from "./fix-policy.js";
 import { osecDB, resolveOsecDbPath } from "@0/engine/storage";
 import { consoleTransportOptions, type ConsoleClient, type ConsoleTransportOptions } from "../console-client.js";
-import { connect, DEFAULT_SCAN_MODEL, defaultScanDeps, waitForThread, type ScanDeps } from "./scan.js";
+import { connect, DEFAULT_MODEL_HELP, defaultScanDeps, defaultScanModel, waitForThread, type ScanDeps } from "./scan.js";
 import { resolveFindingId, shortFindingId } from "../finding-id.js";
 import { selectHost } from "../host/index.js";
 import { finishWithError, UsageError } from "./output.js";
@@ -241,7 +241,7 @@ export async function runFix(id: string, options: FixOptions, deps: FixDeps): Pr
 }
 
 async function runThread(client: ConsoleClient, deps: FixDeps, folder: string, finding: FindingToFix, options: FixOptions, budget: number, policy?: FixPolicy) {
-  const created = asJson(asJson(await client.request("POST", "/api/console/sessions", { runtime: { model: options.model ?? DEFAULT_SCAN_MODEL }, title: `Fix: ${finding.title}`.slice(0, 120), costCeilingUsd: budget })).session);
+  const created = asJson(asJson(await client.request("POST", "/api/console/sessions", { runtime: { model: options.model ?? defaultScanModel() }, title: `Fix: ${finding.title}`.slice(0, 120), costCeilingUsd: budget })).session);
   const id = String(created.id);
   const path = `/api/console/sessions/${encodeURIComponent(id)}`;
   await client.request("PATCH", `${path}/configuration`, { workspacePath: folder });
@@ -264,7 +264,7 @@ export function registerFixCommand(program: Command, deps: FixDeps = defaults): 
     .option("--repo-policy", "Also read fix-policy.* or .zero/fix-policy.* from the repository being fixed (untrusted content; off by default)")
     .option("--no-pr", "Commit on the fix branch but do not push or open a pull request")
     .option("--budget <usd>", "Stop when the estimated spend reaches this many USD", String(DEFAULT_BUDGET_USD))
-    .option("--model <model>", `Model for the fix thread (default: ${DEFAULT_SCAN_MODEL})`)
+    .option("--model <model>", `Model for the fix thread (${DEFAULT_MODEL_HELP})`)
     .option("--timeout <seconds>", "Maximum seconds to wait for the fix", String(DEFAULT_TIMEOUT_SECONDS))
     )
     .addHelpText("after", "\nNothing is pushed to the base branch and nothing is merged: the change goes to a branch named 0/fix-<id>, and running it again updates the same pull request.\nExit codes: 0 a verified change (or committed with --no-pr), 1 no change or a failed check, 2 usage error, 3 stopped at the budget or time limit.")

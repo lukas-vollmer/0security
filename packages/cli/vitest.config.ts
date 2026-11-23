@@ -13,6 +13,8 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}", "test/e2e/**/*.test.ts"],
     testTimeout: 20_000,
     // Threads and scans read Memory only when a test opts in; never touch the real ~/.0/memory.
-    env: { ZERO_DISABLE_MEMORY: "1" },
+    // A developer's installed Claude Code must not become a provider (or be spawned) in tests;
+    // tests of the Claude subscription pass their own environment.
+    env: { ZERO_DISABLE_MEMORY: "1", ZERO_CLAUDE_CODE: "0" },
   },
 });

@@ -44,6 +44,9 @@ export {
   CodexCatalogRefreshError,
 } from "./runtime/codex-models.js";
 export type { CodexCatalogModel } from "./runtime/codex-models.js";
+export { claudeCodeStatus } from "./runtime/claude-code.js";
+export type { ClaudeCodeStatus } from "./runtime/claude-code.js";
+export { CLAUDE_CODE_DEFAULT_MODEL, claudeCodeConfigured, isClaudeCodeModel } from "./runtime/claude-code-config.js";
 export { DEFAULT_OPENAI_MODEL } from "./runtime/llm-api/provider-config.js";
 export { modelTransportStats } from "./runtime/llm-api/transport.js";
 export type { ModelTransportStats } from "./runtime/llm-api/transport.js";

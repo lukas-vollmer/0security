@@ -55,8 +55,8 @@ export interface PrivateWorkerRuntimeBinding {
   identity: string;
   opencodeConversationId: string;
   accessProgramReceipt?: AccessProgramMetadata;
-  /** Set by the pi-ai runtime so a worker rehydrates the same implementation. Absent = legacy. */
-  runtimeKind?: "pi-ai";
+  /** Set by the pi-ai and Claude Code runtimes so a worker rehydrates the same implementation. Absent = legacy. */
+  runtimeKind?: "pi-ai" | "claude-code";
 }
 
 export class LlmApiRuntime implements Runtime, NativeRuntime {
@@ -231,6 +231,8 @@ export class LlmApiRuntime implements Runtime, NativeRuntime {
     // Thread the requested model into detection so provider follows the model
     // per-call (per-call multi-provider routing) when its auth is available.
     const detected = detectProvider(config.apiKey, config.model ?? this.env["ZERO_MODEL"], this.env, config.provider as ApiProvider | undefined);
+    // The factory routes this provider to ClaudeCodeRuntime; it has no HTTP wire here.
+    if (detected.provider === "claude-code") throw new Error("The Claude subscription runs through the Claude Code runtime; create it with createNativeApiRuntime().");
     this.provider = detected.provider;
     this.apiKey = detected.apiKey;
     this.baseUrl = detected.baseUrl;
@@ -678,7 +680,9 @@ export class LlmApiRuntime implements Runtime, NativeRuntime {
   private isModelAccessible(model: string): boolean {
     if (this.grantedProviderTransport) return this.grantedProviderTransport.models.includes(model);
     if (this.workbenchProviderProxy) return this.accessibleModels().includes(model);
-    if (providerForModel(model, this.env) !== undefined) return true;
+    // A child of this runtime keeps its HTTP route; it can never be handed to
+    // the Claude Code subscription, so that provider does not make a model reachable here.
+    if (providerForModel(model, { ...this.env, ZERO_CLAUDE_CODE: "0" }) !== undefined) return true;
     return this.accessibleModels().includes(model);
   }
 
@@ -1110,6 +1114,7 @@ export class LlmApiRuntime implements Runtime, NativeRuntime {
       case "deepseek": return "DeepSeek";
       case "chatgpt-plan": return "ChatGPT plan";
       case "chatgpt-codex": return "ChatGPT (Codex backend)";
+      case "claude-code": return "Claude subscription";
       case "z-ai": return "Z.ai (GLM)";
       case "kimi": return "Kimi (Moonshot)";
       case "qwen": return "Qwen (Alibaba Model Studio)";

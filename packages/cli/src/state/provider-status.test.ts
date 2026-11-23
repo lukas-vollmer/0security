@@ -56,16 +56,18 @@ describe("PROVIDERS", () => {
     // The scope decision: chatgpt-codex is OAuth-only. xai and
     // kimi gained a device-code OAuth flow, and openrouter a PKCE browser flow,
     // but all three keep a pasted API key as a secondary method (OAuth is
-    // preferred, so it leads `methods`). Anthropic OAuth is deferred, so
+    // preferred, so it leads `methods`). A Claude subscription is its own
+    // sign-in-only provider (claude-code, through Claude Code's login), so
     // anthropic — and every other provider — stays api-key only.
     const byId = new Map(PROVIDERS.map((provider) => [provider.id, provider]));
     expect(byId.get("chatgpt-codex")?.methods).toEqual(["oauth"]);
+    expect(byId.get("claude-code")?.methods).toEqual(["oauth"]);
     expect(byId.has("copilot") || byId.has("google") || byId.has("cline")).toBe(false);
     expect(byId.get("xai")?.methods).toEqual(["oauth", "api-key"]);
     expect(byId.get("kimi")?.methods).toEqual(["oauth", "api-key"]);
     expect(byId.get("openrouter")?.methods).toEqual(["oauth", "api-key"]);
     expect(byId.get("anthropic")?.methods).toEqual(["api-key"]);
-    const oauthCapable = new Set(["chatgpt-plan", "chatgpt-codex", "xai", "kimi", "openrouter"]);
+    const oauthCapable = new Set(["chatgpt-plan", "chatgpt-codex", "claude-code", "xai", "kimi", "openrouter"]);
     for (const provider of PROVIDERS) {
       if (oauthCapable.has(provider.id)) continue;
       expect(provider.methods).toEqual(["api-key"]);
@@ -103,6 +105,7 @@ describe("PROVIDERS", () => {
         "azure",
         "chatgpt-codex",
         "chatgpt-plan",
+        "claude-code",
         "deepseek",
         "kimi",
         "openai",
@@ -247,5 +250,16 @@ describe("isProviderConfigured", () => {
     for (const state of providerStates(env)) {
       expect(isProviderConfigured(state.id, env)).toBe(state.configured);
     }
+  });
+});
+
+describe("Claude subscription provider", () => {
+  it("is configured by the detected Claude Code or a Claude Code token, never by an Anthropic key", () => {
+    const claude = PROVIDERS.find((provider) => provider.id === "claude-code");
+    expect(claude).toMatchObject({ label: "Claude subscription", methods: ["oauth"], envVars: ["ZERO_CLAUDE_CODE_PATH", "CLAUDE_CODE_OAUTH_TOKEN"] });
+    expect(claude?.hint).toContain("claude login");
+    expect(providerStates({ ZERO_CLAUDE_CODE_PATH: "/usr/local/bin/claude" }).find((state) => state.id === "claude-code")?.configured).toBe(true);
+    expect(providerStates({ ANTHROPIC_API_KEY: "sk-ant-x" }).find((state) => state.id === "claude-code")?.configured).toBe(false);
+    expect(PROVIDERS[0]?.id).toBe("claude-code");
   });
 });

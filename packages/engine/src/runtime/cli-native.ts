@@ -30,6 +30,27 @@ const TOOL_BATCH_SETTLE_MS = 150;
 const STDOUT_CATCH_UP_MS = 2_000;
 
 /**
+ * How the CLI process is launched. The defaults keep the historical
+ * behaviour (`claude` from PATH, the host environment, the prompt as an
+ * argument); the Claude subscription runtime (`claude-code.ts`) sets all of
+ * them so the subprocess is isolated from the operator's own Claude Code
+ * customizations and from 0's other credentials.
+ */
+export interface CliNativeOptions {
+  /** Executable to run: an absolute path or a name resolved on PATH, read per spawn. Defaults to the runtime type. */
+  command?: string | (() => string);
+  /** Flags added to every invocation (model, effort, isolation). Read per spawn so live selection changes apply. */
+  args?: () => readonly string[];
+  /** The complete child environment. Defaults to `{ ...process.env, ...config.env }`. */
+  env?: () => NodeJS.ProcessEnv;
+  /**
+   * Send the prompt on stdin instead of as an argument. Linux caps a single
+   * argument at 128 KiB, and a prompt starting with `-` would be read as a flag.
+   */
+  promptOnStdin?: boolean;
+}
+
+/**
  * CliNativeRuntime — wraps a CLI runtime (`claude`, `codex`, `gemini`) so
  * that it satisfies the {@link NativeRuntime} contract used by
  * `runNativeAgentLoop()`.
@@ -93,15 +114,17 @@ const STDOUT_CATCH_UP_MS = 2_000;
 export class CliNativeRuntime implements NativeRuntime {
   readonly type: RuntimeType;
   private config: RuntimeConfig;
-  private command: string;
-  /** Populated from the first turn's stream-json `system` event. */
+  private readonly options: CliNativeOptions;
+  /** Populated from the first tool-bearing turn's stream-json `system` event. */
   private sessionId: string | undefined;
+  /** System prompt of the conversation that owns {@link sessionId}. */
+  private sessionSystem: string | undefined;
   private observedModel: string | undefined;
   /** Claude Code process blocked on tool-bridge calls between loop turns. */
   private live: BridgedClaudeProcess | undefined;
   private disposing: Promise<void> = Promise.resolve();
 
-  constructor(config: RuntimeConfig) {
+  constructor(config: RuntimeConfig, options: CliNativeOptions = {}) {
     if (config.type === "api") {
       throw new Error(
         "CliNativeRuntime does not support type=api. Use LlmApiRuntime instead.",
@@ -109,7 +132,12 @@ export class CliNativeRuntime implements NativeRuntime {
     }
     this.type = config.type;
     this.config = config;
-    this.command = config.type;
+    this.options = options;
+  }
+
+  private get command(): string {
+    const command = this.options.command;
+    return typeof command === "function" ? command() : command ?? this.type;
   }
 
   /**
@@ -118,7 +146,23 @@ export class CliNativeRuntime implements NativeRuntime {
    */
   resetSession(): void {
     this.sessionId = undefined;
+    this.sessionSystem = undefined;
     void this.disposeLive();
+  }
+
+  private spawnEnv(): NodeJS.ProcessEnv {
+    return this.options.env?.() ?? { ...process.env, ...this.config.env };
+  }
+
+  /**
+   * Arguments for one `claude -p` run and the text to write to its stdin, if
+   * any. Per-turn flags (resume, system prompt, tool bridge) follow these.
+   */
+  private invocation(promptText: string): { args: string[]; stdin?: string } {
+    const prompt = this.options.promptOnStdin ? ["-p"] : ["-p", promptText];
+    const args = [...prompt, "--verbose", "--output-format", "stream-json", ...(this.options.args?.() ?? [])];
+    if (this.config.model) args.push("--model", this.config.model);
+    return this.options.promptOnStdin ? { args, stdin: promptText } : { args };
   }
 
   /** End only the owned bridged invocation, not isolated tool-less summary calls. */
@@ -139,14 +183,14 @@ export class CliNativeRuntime implements NativeRuntime {
     if (model !== parentModel && !Object.values(this.config.agentModels ?? {}).some(approved => approved !== "auto" && approved === model)) {
       throw new Error(`Model '${model}' was not approved for this CLI runtime.`);
     }
-    return new CliNativeRuntime({ ...this.config, timeout, model });
+    return new CliNativeRuntime({ ...this.config, timeout, model }, this.options);
   }
 
   async isAvailable(): Promise<boolean> {
     return new Promise((resolve) => {
       const proc = spawn(this.command, ["--version"], {
         cwd: this.config.cwd ?? process.cwd(),
-        env: { ...process.env, ...this.config.env },
+        env: this.spawnEnv(),
         stdio: ["ignore", "pipe", "pipe"],
       });
       const timer = setTimeout(() => {
@@ -188,17 +232,22 @@ export class CliNativeRuntime implements NativeRuntime {
     }
 
     if (tools.length > 0) return this.executeWithToolBridge(system, messages, tools, callbacks, signal);
-    // A tool-less call (e.g. a context summary) made while a bridged process
-    // is blocked on tool calls runs as an isolated one-off: resuming the same
-    // session from a second process would race the live one.
-    const isolated = this.live !== undefined && !this.live.exited;
-    const clearSession = () => { if (!isolated) this.sessionId = undefined; };
+    // A tool-less call runs as an isolated one-off when a bridged process is
+    // blocked on tool calls (resuming the same session from a second process
+    // would race the live one) or when it belongs to another conversation:
+    // a title, objective or context summary has its own system prompt and
+    // must neither join nor capture the main conversation's session.
+    const isolated = (this.live !== undefined && !this.live.exited) ||
+      (this.sessionId !== undefined && system !== this.sessionSystem);
+    const clearSession = () => { if (!isolated) { this.sessionId = undefined; this.sessionSystem = undefined; } };
+    const resume = !isolated && this.sessionId !== undefined;
 
     // The native loop accumulates the entire conversation in `messages`.
-    // Claude Code holds it server-side once we have a session id, so we
-    // only need to push the latest user turn down the wire.
-    const promptText = buildClaudePromptFromLastUser(messages);
-    if (!promptText) {
+    // Claude Code holds it once we have a session id, so we only need to push
+    // the latest user turn down the wire; a new session gets the earlier turns
+    // replayed so it does not answer the latest message out of context.
+    const latest = buildClaudePromptFromLastUser(messages);
+    if (!latest) {
       return {
         content: [{ type: "text", text: "" }],
         stopReason: "error",
@@ -206,11 +255,12 @@ export class CliNativeRuntime implements NativeRuntime {
         error: "CliNativeRuntime: last message was not a user turn (cannot prompt Claude Code).",
       };
     }
+    const lastUser = messages.map(message => message.role).lastIndexOf("user");
+    const promptText = resume ? latest : withConversationHistory(messages.slice(0, lastUser), latest);
 
-    const args: string[] = ["-p", promptText, "--verbose", "--output-format", "stream-json"];
-    if (this.config.model) args.push("--model", this.config.model);
-    if (this.sessionId && !isolated) {
-      args.push("--resume", this.sessionId);
+    const { args, stdin } = this.invocation(promptText);
+    if (resume) {
+      args.push("--resume", this.sessionId!);
     } else if (system && system.trim().length > 0) {
       // System prompt is only meaningful on the first turn — once a
       // session exists, Claude Code retains the original system prompt
@@ -231,10 +281,11 @@ export class CliNativeRuntime implements NativeRuntime {
 
       const proc: ChildProcess = trackExecutionResourceSpawn(() => spawn(this.command, args, {
         cwd: this.config.cwd ?? process.cwd(),
-        env: { ...process.env, ...this.config.env },
-        stdio: ["ignore", "pipe", "pipe"],
+        env: this.spawnEnv(),
+        stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
       }), process.platform !== "win32");
+      writePrompt(proc, stdin);
 
       proc.stdout?.on("data", (chunk: Buffer) => {
         stdoutBuf += chunk.toString("utf-8");
@@ -255,6 +306,7 @@ export class CliNativeRuntime implements NativeRuntime {
           // include `session_id` at the top level.
           if (typeof event.session_id === "string" && !this.sessionId && !isolated) {
             this.sessionId = event.session_id;
+            this.sessionSystem = system;
           }
 
           // ── Assistant message blocks ──
@@ -427,7 +479,13 @@ export class CliNativeRuntime implements NativeRuntime {
     }
     await this.disposeLive();
 
-    const promptText = buildClaudePromptFromLastUser(reply ? [reply] : messages);
+    // Only the conversation that created the session may resume it; a session
+    // a differently-prompted call happened to start first is replaced.
+    const resume = this.sessionId !== undefined && this.sessionSystem === system;
+    if (!resume) { this.sessionId = undefined; this.sessionSystem = undefined; }
+    const latest = buildClaudePromptFromLastUser(reply ? [reply] : messages);
+    const earlier = messages.slice(0, reply ? trailingUserStart(messages) : messages.map(message => message.role).lastIndexOf("user"));
+    const promptText = latest && !resume ? withConversationHistory(earlier, latest) : latest;
     if (!promptText) {
       return {
         content: [{ type: "text", text: "" }],
@@ -453,14 +511,14 @@ export class CliNativeRuntime implements NativeRuntime {
       return { content: [], stopReason: "error", durationMs: Date.now() - start, cancelled: true, error: "CLI execution cancelled." };
     }
 
-    const args: string[] = ["-p", promptText, "--verbose", "--output-format", "stream-json"];
-    if (this.config.model) args.push("--model", this.config.model);
-    if (this.sessionId) args.push("--resume", this.sessionId);
+    const { args, stdin } = this.invocation(promptText);
+    if (resume) args.push("--resume", this.sessionId!);
     else if (system && system.trim().length > 0) args.push("--system-prompt", system);
+    args.push("--mcp-config", bridge.mcpConfig());
+    // Isolation flags may already come from `options.args`; pass each once.
+    if (!args.includes("--strict-mcp-config")) args.push("--strict-mcp-config");
+    if (!args.includes("--tools")) args.push("--tools", "");
     args.push(
-      "--mcp-config", bridge.mcpConfig(),
-      "--strict-mcp-config",
-      "--tools", "",
       "--allowedTools", `mcp__${CLAUDE_TOOL_BRIDGE_SERVER}`,
       "--permission-mode", "default",
     );
@@ -469,13 +527,15 @@ export class CliNativeRuntime implements NativeRuntime {
     try {
       proc = trackExecutionResourceSpawn(() => spawn(this.command, args, {
         cwd: this.config.cwd ?? process.cwd(),
-        env: { ...process.env, ...this.config.env },
-        stdio: ["ignore", "pipe", "pipe"],
+        env: this.spawnEnv(),
+        stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         detached: process.platform !== "win32",
       }), process.platform !== "win32");
+      writePrompt(proc, stdin);
     } catch (err) {
       await bridge.close();
       this.sessionId = undefined;
+      this.sessionSystem = undefined;
       return {
         content: [{ type: "text", text: "" }],
         stopReason: "error",
@@ -486,9 +546,9 @@ export class CliNativeRuntime implements NativeRuntime {
 
     const created = new BridgedClaudeProcess(proc, bridge, {
       timeoutMs: this.config.timeout || 600_000,
-      onSessionId: (id) => { if (this.live === created && !this.sessionId) this.sessionId = id; },
+      onSessionId: (id) => { if (this.live === created && !this.sessionId) { this.sessionId = id; this.sessionSystem = system; } },
       onModel: (model) => { if (this.live === created) this.observedModel = model; },
-      clearSession: () => { if (this.live === created) this.sessionId = undefined; },
+      clearSession: () => { if (this.live === created) { this.sessionId = undefined; this.sessionSystem = undefined; } },
     });
     this.live = created;
     return this.awaitLiveTurn(created, callbacks, signal, start);
@@ -948,10 +1008,61 @@ function sumUsage(byMessage: Map<string, Usage>): Usage | undefined {
  */
 function trailingUserTurn(messages: NativeMessage[]): NativeMessage | undefined {
   const content: NativeContentBlock[] = [];
+  for (const message of messages.slice(trailingUserStart(messages))) content.push(...message.content);
+  return content.length > 0 ? { role: "user", content } : undefined;
+}
+
+/** Index of the first user message after the last assistant message. */
+function trailingUserStart(messages: NativeMessage[]): number {
   let i = messages.length - 1;
   while (i >= 0 && messages[i]!.role === "user") i--;
-  for (const message of messages.slice(i + 1)) content.push(...message.content);
-  return content.length > 0 ? { role: "user", content } : undefined;
+  return i + 1;
+}
+
+/** Write the prompt and close stdin; Claude Code reads the whole prompt before it starts. */
+function writePrompt(proc: ChildProcess, stdin: string | undefined): void {
+  if (stdin === undefined || !proc.stdin) return;
+  // A child that exits early closes the pipe; its exit is reported through `close`.
+  proc.stdin.on("error", () => {});
+  proc.stdin.end(stdin, "utf-8");
+}
+
+/**
+ * Prefix `latest` with the turns before it when the Claude Code session that
+ * held them is gone (a new process after a restart, a timeout, a worker
+ * hand-off or an isolated call). Without them the model would answer the
+ * latest message out of context.
+ */
+export function withConversationHistory(earlier: NativeMessage[], latest: string): string {
+  const history = renderConversationHistory(earlier);
+  return history ? `${history}\n\n${latest}` : latest;
+}
+
+/**
+ * Render earlier native-loop turns as plain text, oldest first. Tool calls and
+ * results keep their ids so later `[0:tool_results]` blocks still line up.
+ * Exported for unit testing.
+ */
+export function renderConversationHistory(messages: NativeMessage[]): string {
+  const turns: string[] = [];
+  for (const message of messages) {
+    const parts: string[] = [];
+    for (const block of message.content) {
+      if (block.type === "text") { if (block.text.trim()) parts.push(block.text.trim()); }
+      else if (block.type === "tool_use") parts.push(`[tool call ${block.id}: ${block.name} ${JSON.stringify(block.input)}]`);
+      else if (block.type === "tool_result") parts.push(`[tool result ${block.tool_use_id}${block.is_error ? " (error)" : ""}]\n${block.content}`);
+      else if (block.type === "image") parts.push(`[image${block.name ? ` ${block.name}` : ""} omitted]`);
+    }
+    if (parts.length > 0) turns.push(`### ${message.role}\n${parts.join("\n")}`);
+  }
+  if (turns.length === 0) return "";
+  return [
+    "[0:conversation_history]",
+    "This conversation started before this session. Its earlier turns, oldest first:",
+    "",
+    turns.join("\n\n"),
+    "[0:end_conversation_history]",
+  ].join("\n");
 }
 
 /**

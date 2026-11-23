@@ -55,7 +55,7 @@ export interface HealthBadge { label: string; tone: "success" | "warning" | "dan
 export function healthBadge(provider: HealthProvider, rowHealthy: boolean, inactive = false): HealthBadge {
   if (!rowHealthy) return { label: "Needs connection", tone: "warning" };
   const state = provider.health?.state ?? "unknown";
-  if (state === "rejected") return { label: "Key rejected", tone: "danger" };
+  if (state === "rejected") return { label: provider.id === "claude-code" ? "Signed out" : "Key rejected", tone: "danger" };
   if (state === "unreachable") return { label: "Can't reach", tone: "warning" };
   if (inactive) return { label: "Inactive", tone: "neutral" };
   if (state === "ok") return { label: "Connected", tone: "success" };
@@ -95,7 +95,7 @@ export async function anyHealthyProvider(fetchJson: <T>(path: string, init?: Req
   } catch { return true; }
 }
 
-const PROVIDER_NAMES: Record<string, string> = { "chatgpt-plan": "ChatGPT plan", "chatgpt-codex": "ChatGPT / Codex", openai: "OpenAI", anthropic: "Anthropic", openrouter: "OpenRouter", deepseek: "DeepSeek", xai: "xAI", "z-ai": "Z.ai", kimi: "Kimi", qwen: "Qwen", azure: "Azure OpenAI", opencode: "OpenCode", together: "Together AI" };
+const PROVIDER_NAMES: Record<string, string> = { "chatgpt-plan": "ChatGPT plan", "chatgpt-codex": "ChatGPT / Codex", "claude-code": "Claude subscription", openai: "OpenAI", anthropic: "Anthropic", openrouter: "OpenRouter", deepseek: "DeepSeek", xai: "xAI", "z-ai": "Z.ai", kimi: "Kimi", qwen: "Qwen", azure: "Azure OpenAI", opencode: "OpenCode", together: "Together AI" };
 
 export interface RejectedBanner {
   headline: string;

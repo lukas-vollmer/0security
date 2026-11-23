@@ -60,6 +60,15 @@ export OPENAI_API_KEY="your-api-key"
 
 `0 scan` takes a folder or a git URL, prints a report (`--format json|md|sarif|html|pdf`) and stops at `--budget` (default $5).
 
+Have a Claude Pro or Max plan? Sign in to [Claude Code](https://code.claude.com/docs) and 0 runs on your subscription, no API key needed:
+
+```bash
+claude login
+0 scan ./your-repo
+```
+
+0 drives the official `claude` CLI headlessly (Anthropic allows a subscription login only inside Claude Code), isolated from your own Claude Code settings, hooks and plugins. See [Claude subscription](docs/src/content/docs/models.md#claude-subscription).
+
 Any supported provider works: set its key instead (Anthropic, OpenRouter, DeepSeek and more, see [Models](https://docs.0.security/models/)), or connect one in the browser with `0`.
 
 <details>

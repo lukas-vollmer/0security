@@ -44,7 +44,7 @@ export class PiRouteError extends Error {
 
 /** Providers that need OAuth, bespoke headers or a non-standard wire; Phase 2+ or never. */
 const UNSUPPORTED_IN_PHASE_1 = new Set<string>([
-  "chatgpt-codex", "chatgpt-plan", "azure", "opencode", "z-ai", "kimi", "qwen",
+  "chatgpt-codex", "chatgpt-plan", "claude-code", "azure", "opencode", "z-ai", "kimi", "qwen",
 ]);
 
 export const DEFAULT_GOOGLE_MODEL = "gemini-2.5-pro";

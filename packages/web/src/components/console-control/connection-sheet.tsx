@@ -32,9 +32,10 @@ const keyLinks: Record<string, { href: string; label: string }> = {
 const OFFLINE_MESSAGE = "You're offline. Reconnect and try again.";
 
 export function providerTitle(provider: Pick<Provider, "id" | "label">): string {
-  return provider.id === "chatgpt-codex" ? "Codex" : provider.id === "chatgpt-plan" ? "ChatGPT plan" : provider.label;
+  return provider.id === "chatgpt-codex" ? "Codex" : provider.id === "chatgpt-plan" ? "ChatGPT plan" : provider.id === "claude-code" ? "Claude" : provider.label;
 }
 export function providerSubtitle(provider: Provider): string {
+  if (provider.id === "claude-code") return "Pro or Max, through Claude Code";
   if (provider.id === "chatgpt-codex") return "Codex sign-in";
   if (provider.id === "chatgpt-plan") return "ChatGPT plan allowance";
   const host = provider.configuration?.baseUrl ? safeHost(provider.configuration.baseUrl) : providerHost[provider.id];
@@ -137,7 +138,8 @@ export function ConnectionSheet({ open, onOpenChange, providers, initialProvider
 
   const needle = query.trim().toLowerCase();
   const matches = providers.filter(item => !needle || `${providerTitle(item)} ${item.id} ${providerSubtitle(item)}`.toLowerCase().includes(needle));
-  const subscriptions = matches.filter(item => item.methods.includes("oauth")).sort((a, b) => (a.id === "chatgpt-codex" ? -1 : b.id === "chatgpt-codex" ? 1 : 0));
+  const subscriptionRank = (id: string) => id === "claude-code" ? 0 : id === "chatgpt-codex" ? 1 : 2;
+  const subscriptions = matches.filter(item => item.methods.includes("oauth")).sort((a, b) => subscriptionRank(a.id) - subscriptionRank(b.id));
   const apiKeys = matches.filter(item => !item.methods.includes("oauth"));
   const authUrl = picked ? officialAuthUrl(picked.id, picked.auth.verificationUrl) : null;
   const link = picked ? keyLinks[picked.id] : undefined;
@@ -145,7 +147,7 @@ export function ConnectionSheet({ open, onOpenChange, providers, initialProvider
   const tile = (item: Provider) => <button key={item.id} type="button" onClick={() => setPickedId(item.id)} className="flex min-w-0 items-center gap-3 rounded-(--radius-card) border-[0.5px] border-(--card-hairline) bg-card p-3 text-left outline-none transition-colors duration-100 hover:bg-secondary focus-visible:outline-ring-inset">
     <LogoTile className="size-9"><ProviderIcon providerId={item.id} className="size-5" /></LogoTile>
     <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{providerTitle(item)}</span><span className="block truncate text-xs text-muted-foreground-2">{providerSubtitle(item)}</span></span>
-    {isConnected(item) ? <span className="shrink-0 text-xs text-muted-foreground-1">{item.methods.includes("oauth") ? "Add another" : "Connected"}</span> : <ChevronRight aria-hidden="true" className="size-(--icon-sm) shrink-0 text-muted-foreground-2" />}
+    {isConnected(item) ? <span className="shrink-0 text-xs text-muted-foreground-1">{item.methods.includes("oauth") && item.id !== "claude-code" ? "Add another" : "Connected"}</span> : <ChevronRight aria-hidden="true" className="size-(--icon-sm) shrink-0 text-muted-foreground-2" />}
   </button>;
   const group = (title: string, items: Provider[]) => items.length > 0 && <section className="flex flex-col gap-3"><h3 className="text-sm font-medium text-foreground">{title}</h3><div className="grid gap-2 sm:grid-cols-2">{items.map(tile)}</div></section>;
 
@@ -169,15 +171,18 @@ export function ConnectionSheet({ open, onOpenChange, providers, initialProvider
         <div className="flex flex-col gap-6 px-6 pb-6">
           {picked.configured && !picked.diagnostics.valid && <Feedback error={picked.diagnostics.message ?? "This connection needs attention."} />}
           {picked.methods.includes("oauth") && <section className="flex flex-col gap-4 rounded-(--radius-card) border-[0.5px] border-(--card-hairline) bg-card p-4">
-            <h3 className="flex items-center gap-2 text-sm font-medium"><ShieldCheck aria-hidden="true" className="size-4" />{picked.id === "chatgpt-codex" ? "Sign in with ChatGPT" : "Sign in"}</h3>
+            <h3 className="flex items-center gap-2 text-sm font-medium"><ShieldCheck aria-hidden="true" className="size-4" />{picked.id === "chatgpt-codex" ? "Sign in with ChatGPT" : picked.id === "claude-code" ? "Sign in with Claude Code" : "Sign in"}</h3>
             <p role="status" className="text-sm text-muted-foreground-1">{picked.auth.message ? `${picked.auth.message[0]!.toUpperCase()}${picked.auth.message.slice(1)}` : picked.auth.message}</p>
             {picked.id === "chatgpt-plan" && <p className="text-sm text-muted-foreground-2">You choose whether to allow your ChatGPT plan. This connection uses its own registration and never imports Codex credentials. The sign-in page must open on this computer.</p>}
             {picked.id === "chatgpt-codex" && !picked.auth.available && <p className="text-sm text-muted-foreground-2">Codex must be installed on {hostName} to sign in from here. You can also run <code>codex login --device-auth</code> in that host's terminal, then check again.</p>}
+            {picked.id === "claude-code" && <p className="text-sm text-muted-foreground-2">0 runs your Claude Pro or Max plan through Claude Code on {hostName}, using its own sign-in. Install Claude Code there and run <code>claude login</code> with your Claude account, then check again. 0 never sees that login, and runs Claude Code without your settings, hooks or plugins.</p>}
             {picked.auth.userCode && <div><p className="text-xs text-muted-foreground-2">Your code</p><code className="mt-1 inline-block rounded-md border-[0.5px] border-border-2 px-3 py-2 text-lg tracking-widest">{picked.auth.userCode}</code></div>}
             {authUrl && <Button variant="outline" className="self-start" render={<a href={authUrl} target="_blank" rel="noopener noreferrer" />}>Open sign-in page<ExternalLink /></Button>}
             {picked.auth.verificationUrl && !authUrl && <Feedback error="This sign-in link looks unsafe, so it wasn't opened." />}
             <div className="flex flex-wrap gap-2">
-              {picked.auth.phase === "running"
+              {picked.id === "claude-code"
+                ? <SubmitButton pending={auth.isPending} variant={isConnected(picked) ? "outline" : undefined} onClick={() => auth.mutate({ providerId: picked.id, input: "start" })}>Check sign-in</SubmitButton>
+                : picked.auth.phase === "running"
                 ? <SubmitButton variant="outline" pending={auth.isPending} onClick={() => auth.mutate({ providerId: picked.id, input: "cancel" })}>Cancel sign-in</SubmitButton>
                 : <SubmitButton pending={auth.isPending} disabled={!picked.auth.available} onClick={() => auth.mutate({ providerId: picked.id, input: "start" })}>{picked.id === "chatgpt-plan" || picked.id === "chatgpt-codex" ? "Continue with ChatGPT" : "Sign in"}</SubmitButton>}
               {picked.id === "chatgpt-codex" && <Button variant="ghost" onClick={() => void queryClient.invalidateQueries({ queryKey: queryKeys.consoleProviders() })}>Check existing sign-in</Button>}

@@ -5,6 +5,7 @@ import { BEDROCK_DEFAULT_MODEL, AZURE_FOUNDRY_DEPLOYMENT_IDS, TOGETHER_DEFAULT_M
 import { resolveFailoverProvider } from "./fallback.js";
 import { parseCodexAzureConfig } from "./provider-config.js";
 import { readChatGptCodexAuthFile, readChatGptCodexEnv } from "./codex-auth.js";
+import { CLAUDE_CODE_BASE_URL, CLAUDE_CODE_DEFAULT_MODEL, claudeCodeConfigured } from "../claude-code-config.js";
 
 export interface ApiRuntimeDiagnostics {
   valid: boolean;
@@ -71,8 +72,12 @@ export function providerForModel(model: string | undefined, env: Readonly<NodeJS
     if (env.OPENAI_API_KEY) return "openai";
     return undefined;
   }
-  // Claude / Anthropic → direct anthropic key, else OpenRouter (anthropic/*).
-  if (m.startsWith("claude") || m.startsWith("anthropic/") || m.includes("sonnet") || m.includes("opus") || m.includes("haiku")) {
+  if (m.startsWith("claude-code/")) return claudeCodeConfigured(env) ? "claude-code" : undefined;
+  // Claude / Anthropic → the operator's Claude subscription through Claude Code
+  // (like GPT models prefer a Codex login), else a direct anthropic key, else
+  // OpenRouter (anthropic/*).
+  if (m.startsWith("claude") || m.startsWith("anthropic/") || m.includes("sonnet") || m.includes("opus") || m.includes("haiku") || m.includes("fable")) {
+    if (claudeCodeConfigured(env)) return "claude-code";
     if (env.ANTHROPIC_API_KEY) return "anthropic";
     if (env.OPENROUTER_API_KEY) return "openrouter";
     return undefined;
@@ -83,7 +88,7 @@ export function providerForModel(model: string | undefined, env: Readonly<NodeJS
 export const DEFAULT_PROVIDER_MODELS: Record<ApiProvider, string | undefined> = {
   openrouter: DEFAULT_OPENROUTER_MODEL, anthropic: DEFAULT_ANTHROPIC_MODEL,
   openai: DEFAULT_OPENAI_MODEL, azure: undefined, deepseek: DEEPSEEK_DEFAULT_MODEL,
-  "chatgpt-plan": undefined, "chatgpt-codex": CODEX_DEFAULT_MODEL, "z-ai": ZAI_DEFAULT_MODEL,
+  "chatgpt-plan": undefined, "chatgpt-codex": CODEX_DEFAULT_MODEL, "claude-code": CLAUDE_CODE_DEFAULT_MODEL, "z-ai": ZAI_DEFAULT_MODEL,
   kimi: KIMI_DEFAULT_MODEL, qwen: QWEN_DEFAULT_MODEL, xai: XAI_DEFAULT_MODEL,
   together: TOGETHER_DEFAULT_MODEL, opencode: OPENCODE_DEFAULT_MODEL, bedrock: BEDROCK_DEFAULT_MODEL,
 };
@@ -169,6 +174,12 @@ export function detectProvider(configApiKey: string | undefined, preferredModel:
       throw new Error(`${source} is unsupported: ${pinnedProviderRaw}`);
     }
     const provider = pinnedProviderRaw as ApiProvider;
+    if (provider === "claude-code") {
+      // Authenticated by the local Claude Code login, not by a key: the runtime
+      // reports a missing or signed-out Claude Code itself.
+      if (configApiKey) throw new Error(`${source}=claude-code uses the Claude Code login, not RuntimeConfig.apiKey`);
+      return { provider, apiKey: "", baseUrl: CLAUDE_CODE_BASE_URL, defaultModel: preferredModel ?? env["ZERO_MODEL"] ?? CLAUDE_CODE_DEFAULT_MODEL, wireApi: "chat_completions" };
+    }
     const model = preferredModel ?? env["ZERO_MODEL"] ??
       (provider === "azure" ? env.AZURE_OPENAI_MODEL ?? parseCodexAzureConfig(env).model : provider === "openai" ? env.OPENAI_MODEL : undefined) ??
       (configProvider !== undefined ? DEFAULT_PROVIDER_MODELS[provider] : undefined);
@@ -269,6 +280,9 @@ export function detectProvider(configApiKey: string | undefined, preferredModel:
     case "chatgpt-codex":
       return { provider: "chatgpt-codex", apiKey: "", baseUrl: CODEX_API_ENDPOINT,
         defaultModel: env["ZERO_MODEL"] ?? CODEX_DEFAULT_MODEL, wireApi: "responses" };
+    case "claude-code":
+      return { provider: "claude-code", apiKey: "", baseUrl: CLAUDE_CODE_BASE_URL,
+        defaultModel: CLAUDE_CODE_DEFAULT_MODEL, wireApi: "chat_completions" };
     case "anthropic":
       return { provider: "anthropic", apiKey: env.ANTHROPIC_API_KEY as string,
         baseUrl: env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com", defaultModel: DEFAULT_ANTHROPIC_MODEL, wireApi: "chat_completions" };
@@ -280,6 +294,15 @@ export function detectProvider(configApiKey: string | undefined, preferredModel:
         baseUrl: env.OPENAI_BASE_URL ?? "https://api.openai.com/v1", defaultModel: env.OPENAI_MODEL ?? DEFAULT_OPENAI_MODEL, wireApi: openAICompatibleWireApi(env, "OPENAI_WIRE_API") };
     default:
       break; // fall through to env-priority detection
+  }
+
+  // A Claude subscription through the operator's Claude Code login is the
+  // first subscription this fork tries: the CLI sets ZERO_CLAUDE_CODE_PATH at
+  // startup when `claude` is installed (ZERO_CLAUDE_CODE=0 turns that off).
+  // Explicit selections, explicit keys and model routing above still win.
+  if (claudeCodeConfigured(env)) {
+    return { provider: "claude-code", apiKey: "", baseUrl: CLAUDE_CODE_BASE_URL,
+      defaultModel: env["ZERO_MODEL"] ?? CLAUDE_CODE_DEFAULT_MODEL, wireApi: "chat_completions" };
   }
 
   // Prefer ChatGPT subscription auth over API keys:

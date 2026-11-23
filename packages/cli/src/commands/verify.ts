@@ -13,7 +13,7 @@ import { attackerImpactSentence, firstCitation, MAX_VERIFY_FINDINGS_PER_PROMPT, 
 import { listOsecRunDatabasePaths, osecDB, resolveOsecDbPath, type FindingModelVerification, type ModelVerdict } from "@0/engine/storage";
 import { consoleTransportOptions, type ConsoleClient, type ConsoleTransportOptions } from "../console-client.js";
 import { resolveFindingId, shortFindingId } from "../finding-id.js";
-import { connect, DEFAULT_SCAN_MODEL, defaultScanDeps, waitForThread, type ScanDeps } from "./scan.js";
+import { connect, DEFAULT_MODEL_HELP, defaultScanDeps, defaultScanModel, waitForThread, type ScanDeps } from "./scan.js";
 import { finishWithError, UsageError } from "./output.js";
 import { asJson, finishedThread } from "./thread-output.js";
 
@@ -193,7 +193,7 @@ interface ThreadOutcome { id?: string; reply?: string; error?: string; costUsd?:
 
 async function runThread(client: ConsoleClient, deps: VerifyDeps, folder: string, group: VerifyCandidate[], options: VerifyOptions, budget: number): Promise<ThreadOutcome> {
   const title = group.length === 1 ? `Verify: ${group[0]!.title}` : `Verify ${group.length} findings in ${group[0]!.path}`;
-  const created = asJson(asJson(await client.request("POST", "/api/console/sessions", { runtime: { model: options.model ?? DEFAULT_SCAN_MODEL }, title: title.slice(0, 120), costCeilingUsd: budget })).session);
+  const created = asJson(asJson(await client.request("POST", "/api/console/sessions", { runtime: { model: options.model ?? defaultScanModel() }, title: title.slice(0, 120), costCeilingUsd: budget })).session);
   const id = String(created.id);
   const path = `/api/console/sessions/${encodeURIComponent(id)}`;
   await client.request("PATCH", `${path}/configuration`, { workspacePath: folder });
@@ -252,7 +252,7 @@ export async function runVerify(ids: string[], options: VerifyOptions, deps: Ver
       }
     }
     const stored: FindingModelVerification = {
-      verdict, reasoning, verifiedAt: deps.now().toISOString(), model: options.model ?? DEFAULT_SCAN_MODEL,
+      verdict, reasoning, verifiedAt: deps.now().toISOString(), model: options.model ?? defaultScanModel(),
       ...(duplicateOf ? { duplicateOf } : {}), ...(control ? { control } : {}), ...(advisory ? { advisorySeverity: advisory } : {}),
       ...(thread.id ? { threadId: thread.id } : {}), ...(share !== undefined ? { costUsd: share } : {}),
     };
@@ -354,7 +354,7 @@ export function registerVerifyCommand(program: Command, deps: VerifyDeps = defau
     .option("--budget <usd>", "Total spend for this run in USD; no new thread starts once it is used", "2")
     .option("--per-finding <usd>", "Spend cap for one finding, in USD", "0.3")
     .option("--max-consecutive-failures <n>", "Stop after this many checks in a row that return no verdict", "3")
-    .option("--model <model>", `Model for the threads (default: ${DEFAULT_SCAN_MODEL})`)
+    .option("--model <model>", `Model for the threads (${DEFAULT_MODEL_HELP})`)
     .option("--timeout <seconds>", "Maximum seconds to wait for one thread", "600")
     .option("--dry-run", "List what would be checked and skipped; change nothing")
     .addOption(new Option("--format <format>", "Output: text or json").choices(["text", "json"])))

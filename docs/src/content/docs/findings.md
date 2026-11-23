@@ -114,7 +114,7 @@ To make a scan weigh business logic and authorization, give it a reviewed threat
 | `--fail-on <severity>` | Exit 1 when a finding is at or above this severity. |
 | `--passes <n>` | Scan up to 5 times and merge the findings (default 1). `--budget` is the total, split evenly between the passes. |
 | `--timeout <seconds>` | Cancel the scan after this long (default 3600) and print what was found. |
-| `--model <model>` | Model for the scan (default `gpt-6-luna`). |
+| `--model <model>` | Model for the scan (default `claude-opus-5-5` with a [Claude subscription](/models/#claude-subscription), otherwise `gpt-6-luna`). |
 | `--skill <id>` | Skill that holds the scan method (default `scan`). |
 | `--batches <mode>` | `auto` (default) reviews a large folder in batches, `on` always does, `off` keeps one thread. See [Large repositories](#large-repositories). |
 | `--batch-size <n>` | Entry points one batch reviews (default 8). |

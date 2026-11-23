@@ -8,7 +8,7 @@ export function needsModelSourceReconnect(message: string): boolean {
 }
 export function needsProviderSignIn(message: string): boolean {
   if (needsModelSourceReconnect(message)) return false;
-  return /(?:HTTP|API error|status(?: code)?)\s*[:=]?\s*40[13]\b|unauthorized|authentication[_ ](?:error|fail)|invalid[_ ]api[_ ]key|(?:Codex|ChatGPT).*(?:sign in|(?:OAuth|token|credentials?|session) (?:has |have )?expired)/i.test(message);
+  return /(?:HTTP|API error|status(?: code)?)\s*[:=]?\s*40[13]\b|unauthorized|authentication[_ ](?:error|fail)|invalid[_ ]api[_ ]key|(?:Codex|ChatGPT).*(?:sign in|(?:OAuth|token|credentials?|session) (?:has |have )?expired)|`?claude login`?|Claude Code (?:is not installed|is installed but not signed in|reports the user is not authenticated|session expired|version is too old)/i.test(message);
 }
 export type RunErrorKind =
   | "model-source" | "sign-in" | "model-disabled" | "model-unavailable" | "folder" | "context"
@@ -33,6 +33,8 @@ export function classifyRunError(message: string): RunError {
   const result = (kind: RunErrorKind, text: string, retryable: boolean): RunError => ({ kind, message: text, retryable });
   if (needsModelSourceReconnect(message)) return result("model-source", v("This {mission} lost its connection to your local model source. Reconnect it, then retry your message."), false);
   if (needsProviderSignIn(message)) {
+    if (/too old for 0/i.test(message)) return result("sign-in", "Claude Code on this computer is too old for 0. Run `claude update` in a terminal, then retry your message.", false);
+    if (/Claude Code|claude login/i.test(message)) return result("sign-in", "Your Claude subscription needs attention. Run `claude login` in a terminal on the computer running 0, then retry your message.", false);
     if (/Codex|ChatGPT/i.test(message)) return result("sign-in", "Your ChatGPT connection needs attention. Sign in again in Connections, then retry your message.", false);
     const provider = /DeepSeek|Anthropic|OpenAI(?!-compatible)|OpenRouter|Gemini|Google/i.exec(message)?.[0];
     return result("sign-in", `Your ${provider ? `${provider} ` : ""}connection needs attention. Update the connection in Settings, then retry your message.`, false);

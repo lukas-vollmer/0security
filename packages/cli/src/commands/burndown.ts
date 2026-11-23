@@ -15,7 +15,7 @@ import type { Command } from "commander";
 import { homeStateDir } from "@0/engine/shared";
 import { osecDB, resolveOsecDbPath } from "@0/engine/storage";
 import { consoleTransportOptions, type ConsoleTransportOptions } from "../console-client.js";
-import { connect, DEFAULT_SCAN_MODEL } from "./scan.js";
+import { connect, DEFAULT_MODEL_HELP, defaultScanModel } from "./scan.js";
 import { defaultFixDeps, runFix, type FixDeps, type FixOptions, type FixOutcome } from "./fix.js";
 import { shortFindingId } from "../finding-id.js";
 import { finishWithError, UsageError } from "./output.js";
@@ -174,7 +174,7 @@ export async function runBurndown(options: BurndownOptions, deps: BurndownDeps):
   const state = deps.store.load();
   const started = deps.now();
   const runId = randomUUID();
-  const model = options.model ?? DEFAULT_SCAN_MODEL;
+  const model = options.model ?? defaultScanModel();
 
   const items = new Map<string, BurndownItem>();
   const queue: Candidate[] = [];
@@ -309,7 +309,7 @@ export function registerBurndownCommand(program: Command, fixDeps: FixDeps = def
     .option("--max-consecutive-failures <n>", "Stop after this many failed fixes in a row", "3")
     .option("--max-failure-rate <fraction>", "Stop when the share of failed fixes is above this (after --min-attempts)", "0.5")
     .option("--min-attempts <n>", "Fixes to attempt before the failure share can stop the run", "4")
-    .option("--model <model>", `Model for the fix threads (default: ${DEFAULT_SCAN_MODEL})`)
+    .option("--model <model>", `Model for the fix threads (${DEFAULT_MODEL_HELP})`)
     .option("--timeout <seconds>", "Maximum seconds to wait for one fix", "1800")
     .option("--retry", "Work again on findings that already have a fix branch or pull request")
     .option("--dry-run", "List what would be attempted and skipped; change nothing")

@@ -17,6 +17,7 @@ import {
 } from "@0/engine";
 import { getSettings } from "./state/settings-store.js";
 import { maybeLoadCodexAuth } from "./codex-auth.js";
+import { maybeLoadClaudeCode } from "./claude-code-auth.js";
 import { presentationEventBus } from "./presentation/event-bus.js";
 import {
   installConsolePresentationBridge,
@@ -63,6 +64,9 @@ installProcessPresentationStreamBridge();
 // through to stale AZURE_OPENAI_API_KEY / OPENAI_API_KEY. No-op in the cloud
 // worker (it sets the tokens itself) and when a token is already present.
 if (!isWorkbenchManagement && !isRemoteBackendClient) maybeLoadCodexAuth();
+// Same convenience for a Claude subscription: an installed Claude Code makes
+// it an auto-detected provider (the engine ranks it first among subscriptions).
+if (!isWorkbenchManagement && !isRemoteBackendClient) maybeLoadClaudeCode();
 
 
 // The settings store initializes the pipeline and preserves explicit environment

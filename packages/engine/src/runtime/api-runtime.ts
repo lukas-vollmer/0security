@@ -22,21 +22,39 @@ import type {
   Runtime, RuntimeConfig, RuntimeContext, RuntimeResult, SubagentModelSelection,
 } from "./types.js";
 import type { CodexCatalogModel } from "./codex-models.js";
-import type { ApiRuntimeDiagnostics } from "./llm-api/provider-detect.js";
+import { detectProvider, type ApiRuntimeDiagnostics } from "./llm-api/provider-detect.js";
 import type { ApiProvider } from "./llm-api/provider-config.js";
 // Imported through the runtime/llm-api.js barrel on purpose: it is the module tests mock to stub the legacy client.
 import { LlmApiRuntime } from "./llm-api.js";
 import type { PrivateWorkerRuntimeBinding } from "./llm-api/runtime.js";
 import { PiAiRuntime } from "./pi/runtime.js";
 import { resolvePiRoute } from "./pi/route.js";
+import { ClaudeCodeRuntime } from "./claude-code.js";
 
 /** Marked alias: the hand-written provider client, retained until pi-ai serves every route. */
 export const LegacyRuntimeAdapter = LlmApiRuntime;
 export type LegacyRuntimeAdapter = LlmApiRuntime;
 
 export type RuntimeMode = "legacy" | "pi-ai" | "auto";
-export type RuntimeKind = "legacy" | "pi-ai";
-type Impl = LlmApiRuntime | PiAiRuntime;
+/** `claude-code`: the Claude subscription through the local Claude Code CLI (runtime/claude-code.ts). */
+export type RuntimeKind = "legacy" | "pi-ai" | "claude-code";
+type Impl = LlmApiRuntime | PiAiRuntime | ClaudeCodeRuntime;
+
+/**
+ * Whether this configuration resolves to the Claude subscription. Uses the
+ * same precedence as every other route (explicit provider, pins, explicit
+ * key, model routing, then the environment) by asking `detectProvider`.
+ */
+function routesToClaudeCode(config: RuntimeConfig, processEnv: Readonly<NodeJS.ProcessEnv>): boolean {
+  if (config.provider !== undefined) return config.provider === "claude-code";
+  if (config.providerTransport || config.siwcConnection) return false;
+  try {
+    const env = Object.freeze({ ...processEnv, ...config.env });
+    return detectProvider(config.apiKey, config.model ?? env["ZERO_MODEL"], env).provider === "claude-code";
+  } catch {
+    return false;
+  }
+}
 
 /** ZERO_RUNTIME: `legacy` (escape hatch), `pi-ai` (force pi), anything else/unset = auto (pi where served, else legacy). */
 export function runtimeMode(env: Readonly<Record<string, string | undefined>> = process.env, override?: Readonly<Record<string, string | undefined>>): RuntimeMode {
@@ -46,6 +64,8 @@ export function runtimeMode(env: Readonly<Record<string, string | undefined>> = 
 
 /** The single implementation decision. Pure over (config, env). */
 export function selectRuntimeKind(config: RuntimeConfig, processEnv: Readonly<NodeJS.ProcessEnv> = process.env): RuntimeKind {
+  // Neither HTTP implementation can serve the subscription, whatever ZERO_RUNTIME says.
+  if (routesToClaudeCode(config, processEnv)) return "claude-code";
   const mode = runtimeMode(processEnv, config.env);
   // Bedrock exists only on the pi-ai layer (AWS SDK credential chain); `legacy` cannot serve it.
   const bedrock = (config.provider ?? config.env?.["ZERO_SELECTED_PROVIDER"] ?? processEnv["ZERO_SELECTED_PROVIDER"])?.trim() === "bedrock";
@@ -63,6 +83,7 @@ export function selectRuntimeKind(config: RuntimeConfig, processEnv: Readonly<No
 
 function construct(config: RuntimeConfig): { kind: RuntimeKind; impl: Impl } {
   const kind = selectRuntimeKind(config);
+  if (kind === "claude-code") return { kind, impl: new ClaudeCodeRuntime({ ...config, provider: "claude-code" }) };
   // The two construction sites below are the only `new LlmApiRuntime(` / `new PiAiRuntime(` in non-test code outside runtime internals.
   return kind === "pi-ai" ? { kind, impl: new PiAiRuntime(config) } : { kind, impl: new LegacyRuntimeAdapter(config) };
 }
@@ -90,7 +111,9 @@ export class ApiRuntime implements Runtime, NativeRuntime {
   static fromPrivateWorkerBinding(binding: PrivateWorkerRuntimeBinding): ApiRuntime {
     const wrapped: { kind: RuntimeKind; impl: Impl } = binding.runtimeKind === "pi-ai"
       ? { kind: "pi-ai", impl: PiAiRuntime.fromPrivateWorkerBinding(binding) }
-      : { kind: "legacy", impl: LegacyRuntimeAdapter.fromPrivateWorkerBinding(binding) };
+      : binding.runtimeKind === "claude-code"
+        ? { kind: "claude-code", impl: ClaudeCodeRuntime.fromPrivateWorkerBinding(binding) }
+        : { kind: "legacy", impl: LegacyRuntimeAdapter.fromPrivateWorkerBinding(binding) };
     return new ApiRuntime(binding.config, wrapped);
   }
 
@@ -191,7 +214,7 @@ export class ApiRuntime implements Runtime, NativeRuntime {
   cyberAccessProgramConfiguration(): { confirmed?: CyberAccessProgram; requested?: CyberAccessProgram; options: CyberAccessProgram[]; unavailableReason?: string } { return this.#impl.cyberAccessProgramConfiguration(); }
   exportPrivateWorkerBinding(): PrivateWorkerRuntimeBinding { return this.#impl.exportPrivateWorkerBinding(); }
   applyPrivateWorkerBinding(binding: PrivateWorkerRuntimeBinding, options?: { replaceSelection: true }): void {
-    const bindingKind: RuntimeKind = binding.runtimeKind === "pi-ai" ? "pi-ai" : "legacy";
+    const bindingKind: RuntimeKind = binding.runtimeKind === "pi-ai" ? "pi-ai" : binding.runtimeKind === "claude-code" ? "claude-code" : "legacy";
     if (bindingKind === this.#kind) { this.#impl.applyPrivateWorkerBinding(binding, options); return; }
     // A worker may have moved the session to the other implementation; only a replaceSelection checkpoint may do that.
     if (!options?.replaceSelection) throw new Error("Worker checkpoint does not match the current session connection and model.");

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Command } from "commander";
-import { buildInventory, exportReport, isReportExportFormat, type Batch } from "@0/engine";
+import { buildInventory, CLAUDE_CODE_DEFAULT_MODEL, claudeCodeConfigured, exportReport, isReportExportFormat, type Batch } from "@0/engine";
 import { CoverageLedger, coverageSentence, summarizeCoverage } from "@0/engine/storage";
 import { consoleTransportOptions, openConsole, type ConsoleClient, type ConsoleTransportOptions } from "../console-client.js";
 import { homeStateDir, parseSarif, parseScannerList, scanPrompt, scannerArguments, scannerById, scannerTakesRules, SCANNERS, type PrePassLeads, type BatchPromptInfo, type ScanReport } from "@0/engine/shared";
@@ -32,6 +32,20 @@ const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
 const DEFAULT_BUDGET_USD = 5;
 /** Chosen by measurement: on the same one-file scan it finished in 26s and $0.0014 and recorded its finding first try; glm-5.3-flash took minutes and rejected a dozen `finding` calls. */
 export const DEFAULT_SCAN_MODEL = "gpt-6-luna";
+/** `--model` help for the thread commands. */
+export const DEFAULT_MODEL_HELP = `default: ${CLAUDE_CODE_DEFAULT_MODEL} with a Claude subscription, otherwise ${DEFAULT_SCAN_MODEL}`;
+
+/**
+ * The model a scan, fix, verify or threat-model thread runs on without
+ * `--model`: the Claude subscription's default when Claude Code is detected
+ * (or selected with ZERO_SELECTED_PROVIDER=claude-code), otherwise the
+ * measured upstream default. Another pinned provider keeps the upstream default.
+ */
+export function defaultScanModel(env: Readonly<NodeJS.ProcessEnv> = process.env): string {
+  const pinned = (env["ZERO_FORCE_PROVIDER"] || env["ZERO_SELECTED_PROVIDER"] || env["ZERO_PROVIDER"])?.trim();
+  if (pinned) return pinned === "claude-code" ? CLAUDE_CODE_DEFAULT_MODEL : DEFAULT_SCAN_MODEL;
+  return claudeCodeConfigured(env) ? CLAUDE_CODE_DEFAULT_MODEL : DEFAULT_SCAN_MODEL;
+}
 const DEFAULT_TIMEOUT_SECONDS = 3600;
 /** Consecutive failed status requests before the scan gives up on the console (about a minute with the backoff). */
 const MAX_FAILED_POLLS = 12;
@@ -275,7 +289,7 @@ async function runPass(ctx: PassContext, index: number, extra: PassExtra = {}): 
   const { client, deps, resolved, options, total, deadline } = ctx;
   const budget = extra.budget ?? ctx.budget;
   const prePass = "prePass" in extra ? extra.prePass : ctx.prePass;
-  const runtime = { runtime: { model: options.model ?? DEFAULT_SCAN_MODEL } };
+  const runtime = { runtime: { model: options.model ?? defaultScanModel() } };
   const part = extra.batch ? `batch ${extra.batch.index + 1} of ${extra.batch.total}` : total > 1 ? `pass ${index + 1} of ${total}` : "";
   const title = part ? `Scan ${resolved.label} (${part})` : `Scan ${resolved.label}`;
   const created = asJson(asJson(await client.request("POST", "/api/console/sessions", { ...runtime, title, costCeilingUsd: budget })).session);
@@ -556,7 +570,7 @@ export function registerScanCommand(program: Command, deps: ScanDeps = defaultSc
     .option("--org-policy <folder>", "An organisation's policy folder: evaluated first, and wins when a --policy says otherwise or uses the same id; repeat for several", (value: string, previous: string[] = []) => [...previous, value])
     .option("--repo-context", "Also read .0/threat-model.md from the scanned folder as context. Off by default: a change under review can edit that file; in CI pass the base branch's copy with --context instead")
     .option("--skill <id>", "Skill that holds the scan method", "scan")
-    .option("--model <model>", `Model for the scan thread (default: ${DEFAULT_SCAN_MODEL})`)
+    .option("--model <model>", `Model for the scan thread (${DEFAULT_MODEL_HELP})`)
     .option("--batches <mode>", "auto reviews a large folder in batches, one thread per group of entry points, and records what each batch covered; on always does; off keeps one thread", "auto")
     .option("--batch-size <n>", `Entry points one batch reviews (1 to ${MAX_BATCH_SIZE}); a folder with more than this many is split under --batches auto`, String(DEFAULT_BATCH_SIZE))
     .option("--concurrency <n>", `Batches that run at the same time (1 to ${MAX_PARALLEL_PASSES})`, "1")

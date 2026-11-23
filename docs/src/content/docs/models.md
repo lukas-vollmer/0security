@@ -24,6 +24,7 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 | Provider | Environment |
 | --- | --- |
+| Claude subscription (Pro, Max) | Install Claude Code and run `claude login` ([details](#claude-subscription)) |
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | ChatGPT Codex | `codex login`, or `ZERO_CHATGPT_ACCESS_TOKEN` / `ZERO_CHATGPT_OAUTH_REFRESH_TOKEN` |
@@ -127,6 +128,36 @@ With `ZERO_NO_TELEMETRY=1`, `DO_NOT_TRACK=1` or `ZERO_OFFLINE=1`, 0 sends no usa
 
 Some traffic stays under your control. The `web_search` tool is off unless you set `ZERO_FEATURE_WEB_SEARCH=1`. Scan targets are contacted because you point 0 at them. GitHub is contacted only when you scan a GitHub repository.
 
+## Claude subscription
+
+0 runs on a Claude Pro or Max plan through [Claude Code](https://code.claude.com/docs), using Claude Code's own sign-in.
+
+1. Install Claude Code and run `claude login` with your Claude account.
+2. Run `0`. At startup 0 finds `claude` on your `PATH` and makes the subscription its first choice. In the browser it is listed under **Subscriptions** as **Claude**; **Check sign-in** reads the login again.
+
+```bash
+claude login
+0 scan ./your-repo                            # claude-opus-5-5 on your plan
+0 scan ./your-repo --model claude-sonnet-5-5
+```
+
+How it works:
+
+- Anthropic allows a subscription login only inside Claude Code, so 0 never reads, stores or sends it. Each model turn is a headless `claude -p` run. 0's tools reach Claude Code through a local MCP bridge, and 0 still executes every tool call.
+- Each run is isolated from your own Claude Code setup and from the code under review. No settings, hooks, plugins, skills, `CLAUDE.md` files or other MCP servers load, Claude Code's built-in tools are off, it runs in `~/.0/claude-code`, and it receives no API keys or other credentials from 0's environment.
+- Models: `claude-opus-5-5` (default), `claude-sonnet-5-5`, `claude-fable-5-2` and `claude-haiku-5-5`, or the aliases `opus`, `sonnet`, `fable` and `haiku`. The thinking-effort control sets `claude --effort` (default `high`).
+- Requests count against your plan's usage limits. Costs and `--budget` use the API-equivalent price as an estimate; the plan is not billed per token.
+- Claude Code keeps its session transcripts under `~/.claude/projects/`, in the project for `~/.0/claude-code`.
+
+| Variable | Use |
+| --- | --- |
+| `ZERO_CLAUDE_CODE=0` | Turn the Claude subscription off, including detection. |
+| `ZERO_CLAUDE_CODE_PATH` | Use this Claude Code executable instead of the one on `PATH`. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Headless hosts and CI: a long-lived token from `claude setup-token`. Claude Code reads it; 0 only passes it through. |
+| `ZERO_SELECTED_PROVIDER=claude-code` | Pin the subscription. |
+
+Claude models route to the subscription before an `ANTHROPIC_API_KEY`. To use the API key instead, choose **Anthropic** in Connections, set `ZERO_SELECTED_PROVIDER=anthropic`, or set `ZERO_CLAUDE_CODE=0`. Cyber access programs are an OpenAI feature and are not available on the Claude subscription.
+
 ## ChatGPT Codex
 
 In the browser, open **Providers** on the Models page, select **ChatGPT Codex** and follow the device sign-in.
@@ -224,7 +255,7 @@ With several keys set, 0 resolves the provider in this order:
 
 ### Pin a provider
 
-`ZERO_SELECTED_PROVIDER` accepts `openrouter`, `anthropic`, `openai`, `azure`, `deepseek`, `chatgpt-codex`, `z-ai`, `kimi`, `qwen`, `xai`, `opencode`, `together` and `bedrock`.
+`ZERO_SELECTED_PROVIDER` accepts `claude-code`, `openrouter`, `anthropic`, `openai`, `azure`, `deepseek`, `chatgpt-codex`, `z-ai`, `kimi`, `qwen`, `xai`, `opencode`, `together` and `bedrock`.
 
 ```bash
 env ZERO_SELECTED_PROVIDER=deepseek ZERO_MODEL=deepseek-flash \
@@ -245,7 +276,8 @@ Pin a provider when you need a predictable bill, especially with Azure deploymen
 | `grok*`, `xai/*`, `x-ai/*` | xAI Grok |
 | `opencode/*`, `muse-spark*`, `mimo*`, `ling*`, `big-pickle`, `nemotron*`, `minimax*` | OpenCode Zen |
 | `gpt-*`, `o1` to `o4` | ChatGPT Codex when signed in, else OpenAI |
-| `claude*`, `anthropic/*`, IDs containing `sonnet`, `opus` or `haiku` | Anthropic, else OpenRouter |
+| `claude-code/*` | Claude subscription |
+| `claude*`, `anthropic/*`, IDs containing `sonnet`, `opus`, `haiku` or `fable` | Claude subscription when Claude Code is installed, else Anthropic, else OpenRouter |
 | Exact `deepseek-flash`, `deepseek-v4-flash` | DeepSeek |
 | Known Azure Foundry deployment IDs | Azure |
 
@@ -253,18 +285,19 @@ A match without that provider's key falls through to ambient priority. These rul
 
 ### Ambient priority
 
-1. ChatGPT Codex (`ZERO_CHATGPT_*` tokens or `~/.codex/auth.json`)
-2. DeepSeek
-3. OpenRouter
-4. Azure OpenAI
-5. OpenAI
-6. Z.ai GLM
-7. Moonshot Kimi
-8. Alibaba Qwen
-9. xAI Grok
-10. OpenCode Zen
-11. Anthropic
-12. Together AI
+1. Claude subscription (Claude Code installed; `ZERO_CLAUDE_CODE=0` skips it)
+2. ChatGPT Codex (`ZERO_CHATGPT_*` tokens or `~/.codex/auth.json`)
+3. DeepSeek
+4. OpenRouter
+5. Azure OpenAI
+6. OpenAI
+7. Z.ai GLM
+8. Moonshot Kimi
+9. Alibaba Qwen
+10. xAI Grok
+11. OpenCode Zen
+12. Anthropic
+13. Together AI
 
 An explicit `--api-key` without a pin picks by shape. `sk-or-` selects OpenRouter, `sk-ant-` selects Anthropic, and anything else selects OpenAI-compatible access. Prefer environment variables, because command-line secrets end up in shell history and process lists.
 
@@ -276,6 +309,7 @@ A connection shows **Connected** (green) only after the provider accepts its key
 | --- | --- |
 | **Connected** | The provider accepted the key. |
 | **Key rejected** | The provider answered 401 or 403. The row tells you which variable to set, or to update the saved key. |
+| **Signed out** | Claude subscription only: Claude Code is missing or not signed in to a Claude account. Run `claude login`, then **Check sign-in**. |
 | **Can't reach** | The provider did not answer in time. Check your network or the API endpoint. |
 | **Connected** (grey) | A key is present, but the provider has no cheap check (for example Azure OpenAI), so 0 has not verified it. |
 

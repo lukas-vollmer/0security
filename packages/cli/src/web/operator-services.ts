@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { createNativeApiRuntime, isApiRuntime, runtimeFromPrivateWorkerBinding, type ConsoleRuntime, 
-  createConsoleRuntime, CodexCatalogRefreshError,
+import { createNativeApiRuntime, isApiRuntime, runtimeFromPrivateWorkerBinding, type ConsoleRuntime,
+  createConsoleRuntime, CodexCatalogRefreshError, claudeCodeStatus, isClaudeCodeModel, type ClaudeCodeStatus,
   TOOL_DEFINITIONS, getToolsForRole,
   listProjectReviewChecks, updateProjectReviewChecks,
   recommendModels, type NativeRuntime, type RuntimeConfig, type ReviewCheckMutation } from "@0/engine";
@@ -13,11 +13,12 @@ import {
   addAccount, removeAccount, logoutProvider, setActiveAccount, listAccounts,
 } from "../state/credential-store.js";
 import { maybeLoadCodexAuth } from "../codex-auth.js";
+import { maybeLoadClaudeCode } from "../claude-code-auth.js";
 import { PROVIDERS, isRemovedProviderId, providerStates } from "../state/provider-status.js";
 import { createPreferredConsoleRuntime, saveAppliedAccessProgram, saveAppliedModelPreference } from "../state/model-preference.js";
 import { buildFullModelCatalog } from "../state/model-catalog.js";
 import { discoverConnectionModels } from "../state/available-models.js";
-import { ConnectionHealthMonitor, HEALTH_TIMEOUT_MS, connectionFingerprint, probeProviderKey, type ConnectionHealth, type HealthState } from "./connection-health.js";
+import { ConnectionHealthMonitor, HEALTH_TIMEOUT_MS, HEALTH_TTL_MS, connectionFingerprint, probeProviderKey, type ConnectionHealth, type HealthState } from "./connection-health.js";
 
 type ModelDiscoveryResult = Awaited<ReturnType<typeof discoverConnectionModels>>;
 /** Discovery results are served from memory this long before a background refresh. */
@@ -64,6 +65,8 @@ function webRuntimeEnv(rotate = false): Record<string, string> {
   const env = { ...process.env };
   Object.assign(env, connectionConfigEnvPatch(env), credentialEnvPatch(loadCredentials(), env), accountEnvPatch(rotate ? applySpread(loadAccountStore()) : loadAccountStore(), env));
   maybeLoadCodexAuth({ env });
+  // Picks up a Claude Code installed while the console is running.
+  maybeLoadClaudeCode({ env });
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined));
 }
 
@@ -211,6 +214,12 @@ async function validateRuntimeModels(runtime: ConsoleRuntime): Promise<void> {
       if (model !== "auto" && !models.some((entry) => entry.id === model.replace(/^openai\//, ""))) throw new OperatorError(409, "model_not_available", "A role model is not available to this ChatGPT account.");
     }
   }
+  if (diagnostics.provider === "claude-code") {
+    if (!isClaudeCodeModel(runtime.resolvedModel())) throw new OperatorError(409, "model_not_available", "Choose a Claude model for the Claude subscription.");
+    for (const model of Object.values(runtime.modelSelection().agentModels)) {
+      if (model !== "auto" && !isClaudeCodeModel(model)) throw new OperatorError(409, "model_not_available", "A role model is not a Claude model, so the Claude subscription cannot run it.");
+    }
+  }
   if (diagnostics.provider === "chatgpt-plan") {
     const models = await runtime.availableModelCatalog(AbortSignal.timeout(10_000));
     if (!models.some(model => model.id === runtime.resolvedModel())) throw new OperatorError(409, "model_not_available", "This model is not available to the connected ChatGPT plan.");
@@ -281,7 +290,8 @@ export async function applyWebConsoleRuntimeSelection(runtime: ConsoleRuntime, s
   let providerId = selection.providerId;
   if (providerId === undefined && selection.model !== undefined) {
     const inferred = modelProvider(selection.model);
-    if (inferred !== "unknown" && inferred !== currentProvider && !(["chatgpt-codex", "chatgpt-plan"].includes(currentProvider) && inferred === "openai")) providerId = inferred;
+    // A subscription serves its vendor's models: a Claude model picked on the Claude subscription stays on it.
+    if (inferred !== "unknown" && inferred !== currentProvider && !(["chatgpt-codex", "chatgpt-plan"].includes(currentProvider) && inferred === "openai") && !(currentProvider === "claude-code" && inferred === "anthropic")) providerId = inferred;
   }
   const targetProvider = providerId ?? currentProvider;
   const cyberAccessProgram = selection.cyberAccessProgram !== undefined ? selection.cyberAccessProgram : runtime.getCyberAccessProgram() ?? null;
@@ -410,9 +420,34 @@ export class WebOperatorServices {
     };
   }
 
+  /** Last `claude auth status` reading; Claude Code owns the login, 0 only reports it. */
+  #claudeCode: { at: number; status: ClaudeCodeStatus } | undefined;
+  #claudeCodeTask: Promise<ClaudeCodeStatus> | undefined;
+
+  #refreshClaudeCode(): Promise<ClaudeCodeStatus> {
+    const running = this.#claudeCodeTask;
+    if (running) return running;
+    const task: Promise<ClaudeCodeStatus> = claudeCodeStatus(webRuntimeEnv())
+      .catch((error: unknown): ClaudeCodeStatus => ({ installed: true, message: `Claude Code's sign-in could not be read: ${publicMessage(error)}` }))
+      .then((status: ClaudeCodeStatus) => { this.#claudeCode = { at: Date.now(), status }; return status; })
+      .finally(() => { if (this.#claudeCodeTask === task) this.#claudeCodeTask = undefined; });
+    this.#claudeCodeTask = task;
+    return task;
+  }
+
+  #claudeCodeAuth(): WebAuthStatus {
+    const cached = this.#claudeCode;
+    if (!cached || Date.now() - cached.at > HEALTH_TTL_MS) void this.#refreshClaudeCode();
+    if (!cached) return webAuthStatus({ phase: "idle", message: "Checking the Claude Code sign-in on this computer.", lines: [] }, false);
+    const { status } = cached;
+    const phase = !status.installed ? "unavailable" : status.loggedIn === true && (!status.authMethod || status.authMethod === "claude.ai") ? "connected" : "idle";
+    return webAuthStatus({ phase, message: status.message, lines: [] }, false);
+  }
+
   #authStatus(id: string, configured: boolean): WebAuthStatus {
     if (id === "chatgpt-plan") return this.#plan.status();
     if (id === "chatgpt-codex") return this.#publicAuth(this.#codex.status());
+    if (id === "claude-code") return this.#claudeCodeAuth();
     const flow = this.#auth.get(id);
     if (flow?.status.phase === "running") return { ...flow.status, lines: [...flow.status.lines] };
     if (configured) return webAuthStatus({ phase: "connected", message: "Credentials are configured. The first request verifies account access.", lines: [] }, Boolean(PROVIDER_DEVICE_AUTH[id]));
@@ -424,6 +459,11 @@ export class WebOperatorServices {
   readonly #health = new ConnectionHealthMonitor(providerId => this.#probeHealth(providerId));
 
   #probeHealth(providerId: string): Promise<HealthState> {
+    if (providerId === "claude-code") {
+      // No key to probe: Claude Code says whether its subscription login works.
+      return this.#refreshClaudeCode().then(status => !status.installed || status.loggedIn === false ? "rejected"
+        : status.loggedIn === true ? (status.authMethod && status.authMethod !== "claude.ai" ? "rejected" : "ok") : "unknown");
+    }
     const env = webRuntimeEnv();
     const info = provider(providerId);
     const variable = info.envVars.find(key => Boolean(env[key]?.trim()));
@@ -449,7 +489,8 @@ export class WebOperatorServices {
     const variable = info.envVars.find(key => Boolean(env[key]?.trim()));
     const baseVar = connectionBaseUrlVar(info.id);
     const health = this.#health.read(info.id, connectionFingerprint([info.id, variable ? env[variable] : undefined, baseVar ? env[baseVar] : undefined]));
-    const hint = health.state === "rejected" ? (source === "environment" ? `Set ${variable ?? info.envVars[0]} in your environment` : "Update the key")
+    const hint = health.state === "rejected" && info.id === "claude-code" ? "Run `claude login` in a terminal on this computer, then check again"
+      : health.state === "rejected" ? (source === "environment" ? `Set ${variable ?? info.envVars[0]} in your environment` : "Update the key")
       : health.state === "unreachable" ? "Check your network or the API endpoint" : null;
     return { ...health, hint };
   }
@@ -489,7 +530,8 @@ export class WebOperatorServices {
           diagnostics = { valid: false, reason: "invalid_config", message: publicMessage(error) };
         }
       }
-      const source = configured ? environment ? "environment" : store.providers[info.id] ? "account-store" : "codex-file" : null;
+      // The Claude subscription's login belongs to Claude Code, whatever variable pointed 0 at it.
+      const source = !configured ? null : info.id === "claude-code" ? "claude-code" : environment ? "environment" : store.providers[info.id] ? "account-store" : "codex-file";
       return {
         // Which variable is in use: it wins over a saved connection for the same provider, and the page says so.
         health: this.#healthView(info, env, configured, source), environmentVariable: source === "environment" ? via ?? null : null,
@@ -573,7 +615,7 @@ export class WebOperatorServices {
     const rows = discovered.models.map(model => ({
       id: model.id, provider: model.provider,
       enabled: !isModelDisabled(disabledByProvider.get(model.provider) ?? disabledByProvider.set(model.provider, disabledModelsFor(model.provider, accountStore)).get(model.provider)!, model.id),
-      price: model.provider === "chatgpt-plan" ? "Shared ChatGPT allowance" : model.provider === "chatgpt-codex" ? "Included in subscription" : metadata.get(`${model.provider}/${model.id}`)?.price ?? "Unknown rate",
+      price: model.provider === "chatgpt-plan" ? "Shared ChatGPT allowance" : model.provider === "chatgpt-codex" ? "Included in subscription" : model.provider === "claude-code" ? "Included in Claude subscription" : metadata.get(`${model.provider}/${model.id}`)?.price ?? "Unknown rate",
       contextWindowTokens: model.contextTokens ?? resolveContextLimit({ modelId: model.id, providerId: model.provider })?.tokens ?? null,
       source: model.provider !== "chatgpt-plan" && model.source === "catalog" ? "public-catalog" as const : "account" as const,
     }));
@@ -635,6 +677,12 @@ export class WebOperatorServices {
       } else throw new OperatorError(400, "unsupported_auth", "Use native ChatGPT browser sign-in.");
       return { providers: this.#providers() };
     }
+    if (info.id === "claude-code") {
+      // 0 holds no Claude credential to add, switch or delete.
+      throw new OperatorError(409, "official_auth_owned", action === "disconnect"
+        ? "This login belongs to Claude Code. Run `claude logout` to sign out, or set ZERO_CLAUDE_CODE=0 to stop 0 using it."
+        : "Sign in with `claude login` in a terminal on this computer; 0 uses that Claude Code login.");
+    }
     if (action === "configure") {
       const config = validateConnectionConfig(info.id, {
         ...(body.baseUrl !== undefined ? { baseUrl: text(body.baseUrl, "API endpoint") } : {}),
@@ -687,6 +735,11 @@ export class WebOperatorServices {
       return { status: method === "DELETE" ? this.#plan.cancel() : this.#plan.start(profileId) };
     }
     if (info.id === "chatgpt-codex") return { status: this.#publicAuth(method === "DELETE" ? this.#codex.cancel() : this.#codex.start()) };
+    if (info.id === "claude-code") {
+      // Sign-in happens in Claude Code (`claude login`); this re-reads it.
+      this.#health.invalidate();
+      return this.#refreshClaudeCode().then(() => ({ status: this.#claudeCodeAuth() }));
+    }
     const config = PROVIDER_DEVICE_AUTH[info.id];
     if (!config) throw new OperatorError(409, "auth_unavailable", info.hint);
     const previous = this.#auth.get(info.id);
@@ -798,7 +851,7 @@ export class WebOperatorServices {
       }
       else if (path === "connections" && method === "POST") { this.#invalidateModels(); try { data = await this.#connections(input); } finally { this.#invalidateModels(); } }
       else if (/^providers\/[^/]+\/device-auth$/.test(path) && ["POST", "DELETE"].includes(method)) {
-        this.#invalidateModels(); data = this.#deviceAuth(decodeURIComponent(path.split("/")[1]!), method, input); status = method === "POST" ? 202 : 200;
+        this.#invalidateModels(); data = await this.#deviceAuth(decodeURIComponent(path.split("/")[1]!), method, input); status = method === "POST" ? 202 : 200;
       } else if (/^providers\/[^/]+$/.test(path) && method === "GET") {
         const info = provider(decodeURIComponent(path.split("/")[1]!));
         assertPlanAllowed(info.id, { allowChatGptPlan: this.#allowChatGptPlan });
